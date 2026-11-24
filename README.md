@@ -1,217 +1,96 @@
-# fbDOOM: double buffered, playable over a serial console
+# walkman(nw-a30シリーズ)向けfbdoom
+多分a-40/50でも動く(未確認)
 
-Fork of [maximevince/fbDOOM](https://github.com/maximevince/fbDOOM) (DOOM on a
-plain Linux framebuffer). The original description is in
-[README.TXT](README.TXT).
+## 前提
+[wlakman one](https://www.mrwalkman.com/p/walkman-one-nw-a30series.html)か[wampy](https://github.com/unknown321/wampy)を導入しておく(adbが生える)  
+adbが使える  
+linuxを扱える(古いハード向けのクロスコンパイル)  
+など
 
-This fork was made for a cheap DVB-T set-top box, the WIWA HD95 (MStar
-MSD7818, MIPS 34Kc at 552 MHz, 64 MB RAM), running Linux 6.7. Nothing in it
-is specific to that box: the changes work on any Linux framebuffer.
+## ほぅー…と…うせ…いt
+1. `git clone https://github.com/isanan39s/fbDOOM`
+2. [cross-tools/musl-cross](https://github.com/cross-tools/musl-cross)から armv7-unknown-linux-musleabihf.tar.xxを落として展開&パスを通す
+2. `make`
+2. USBマスストレージモードのwalkmanにできたfbdoomと使うwadをコピー
+2. usbマスストレージをオフにしてadb shellで入る
+2. `/contents/`から最低限fbdoomを`/contents/`外にコピーする(wadやらスクリプトもやったほうが楽)
+2. hagoromo1,2 の順でstop サービス止める `stop hagoromo1`
+3. `./fbdoom -iwad doom.wad` enjoy doom!
 
-Related:
-- kernel with the double buffered framebuffer driver (`mstar-gopfb`):
-  https://github.com/mztulip/linux_msd781x
-- ready-made kernel, rootfs and boot instructions for the box:
-  https://github.com/mztulip/msd7818_rootfs_kernel
 
-## Changes compared to upstream
 
-1. **Fast 16 bpp drawing** (`fbdoom/i_video_fbdev.c`). Upstream converts
-   every byte of every scaled pixel through the palette and then `write()`s
-   the whole frame. On the 552 MHz MIPS that took about 160 ms per
-   1600x1000 frame (~6 fps). Now, when the framebuffer is 16 bpp:
-   - the palette is converted to the framebuffer pixel format once, in
-     `I_SetPalette` (`palette16[]`),
-   - each scaled line is built once in RAM and `memcpy`'d `scaling` times
-     straight into the `mmap`ped framebuffer.
+### 以下gemini4によるreadme
+# wmDOOM — fbDOOM for Sony Walkman
 
-   Result: about **50 fps**. Other pixel depths use the original code.
-2. **Double buffering with vsync.** If the framebuffer has
-   `yres_virtual >= 2 * yres`, each frame is drawn into the hidden half and
-   shown with `FBIOPAN_DISPLAY`. Then `FBIO_WAITFORVSYNC` waits until the
-   flip has happened, so there is no tearing. It runs at 35 fps, DOOM's
-   game tic rate. If the driver has only one buffer, it falls back to
-   drawing into the visible one.
-3. **Keys from a serial terminal** (`fbdoom/i_input_tty.c`). Started from a
-   terminal that is not a virtual console (e.g. picocom on a UART), the game
-   reads keys from stdin in raw mode, so no USB keyboard is needed. See
-   [Serial console controls](#serial-console-controls).
-4. `-fps` prints the frame rate every 5 seconds.
-5. The console is put in `KD_GRAPHICS` while playing, and `Quit Game` really
-   exits. Terminal, keyboard and framebuffer are restored by `atexit()`.
-6. **Sound effects on the WIWA HD95** (`fbdoom/i_mstarsound.c`, optional,
-   `MSTAR_SOUND=1`). A software mixer (8 channels, DMX sound lumps from the
-   WAD resampled to 48 kHz stereo, volume and stereo separation) runs in its
-   own thread and feeds the audio DSP of the MStar SoC. Sound comes out on
-   HDMI and on the analog (SCART) output at the same time. See
-   [Sound on the WIWA HD95](#sound-on-the-wiwa-hd95).
-   With `OWN_SOUND=1` the same mixer feeds **our own DSP program** instead
-   of MStar's DSP code (HDMI only so far), so that build can be published.
-   **Music** (both sound builds): Chocolate Doom's OPL music player
-   (`i_oplmusic.c`, MUS/MIDI with the WAD's GENMIDI instruments) on our small
-   OPL2 emulator `opl2.c`, mixed into the sound effects. See
-   [Music](#music).
-7. The `Makefile` defaults to the Buildroot mipsel toolchain
-   (`CROSS_COMPILE ?= mipsel-buildroot-linux-gnu-`) and builds with
-   `-std=gnu89`.
+A dedicated Sony Walkman port of **fbDOOM**, forked from [mztulip/fbDOOM](https://github.com/mztulip/fbDOOM) (originally [maximevince/fbDOOM](https://github.com/maximevince/fbDOOM)).
+
+Designed to run standalone directly on the Walkman's Linux/Android framebuffer (`/dev/graphics/fb0`, 480×800) and capacitive touchscreen (`/dev/input/event1`, e.g. `himax-hx8526-icx`) with no external keyboard or SDL dependencies.
+
+## Features for Walkman
+
+1. **32 bpp `mmap` rendering & `mtkfb` page-flipping (`fbdoom/i_video_fbdev.c`)**
+   - Supports 32 bpp (`RGBA8888` / `BGRA8888`) and 16 bpp `mmap` framebuffers with hardware double buffering (`yres_virtual >= 2 * yres`).
+   - Triggers display refresh on MediaTek (`mtkfb`) panels via `FBIOPAN_DISPLAY` + `FBIOPUT_VSCREENINFO` (`FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE`) every frame.
+2. **480×800 portrait split-screen layout**
+   - **Top (`480×360`)**: DOOM's `320×200` framebuffer scaled cleanly to true 4:3 aspect ratio.
+   - **Bottom (`480×440`)**: Crisp on-screen touch controller rendered directly into the framebuffer (redrawn only when button states change, adding zero per-frame overhead).
+3. **Multi-touch `evdev` input (`fbdoom/i_touch.c`)**
+   - Reads Linux multi-touch events (Type A & Type B) from `/dev/input/event1` and auto-scales touch coordinates via `EVIOCGABS`.
+   - Supports simultaneous inputs (e.g. moving/turning on the D-Pad while firing).
+   - **Toggleable Sprint (`SHIFT`)**: Tapping `SHIFT` toggles autorun (`RUN:ON` / `RUN:OFF`) and persists across map transitions.
+   - **Menu-aware buttons**: `CTRL` and `SPACE` automatically act as `Enter` (or `'y'` on confirmation prompts) while the DOOM menu is active, so the entire game can be navigated by touch alone.
+
+## On-Screen Controls
+
+| Button | In-Game Action | In-Menu Action |
+|---|---|---|
+| **SHIFT** (`RUN:ON/OFF`) | Toggle sprint (autorun) | — |
+| **CTRL** (`FIRE`) | Fire weapon | Confirm / Select (`Enter` / `Y`) |
+| **SPACE** | Use (open doors, switches) | Confirm / Select (`Enter` / `Y`) |
+| **TAB** | Toggle Automap | — |
+| **ESC** | Open Menu | Back / Close Menu |
+| **Circular `✕` D-Pad** | Move & Turn (8-way with diagonal forward+turn) | Navigate Menu (4-way) |
+| **`1` – `7`** | Switch weapons | — |
 
 ## Building
 
+Requires an `armv7-unknown-linux-musleabihf-` cross toolchain (builds a static `armv7-a` hard-float binary by default):
+
 ```sh
 cd fbdoom
-make CROSS_COMPILE=mipsel-buildroot-linux-gnu-      # or any other cross compiler, or none for the host
-${CROSS_COMPILE}strip -o fbdoom_s fbdoom            # optional: 2.1 MB -> 0.5 MB
+make -j$(nproc)
 ```
-For the set-top box, the toolchain comes from the Buildroot SDK
-(`make sdk` in Buildroot, then add
-`~/toolchains/mipsel/mipsel-buildroot-linux-gnu/bin` to `PATH`).
 
-You also need a WAD file, e.g. the shareware
-[doom1.wad](https://doomwiki.org/wiki/DOOM1.WAD).
-
-## Running
+To specify a different toolchain prefix:
 
 ```sh
-./fbdoom -iwad doom1.wad
+make CROSS_COMPILE=arm-linux-musleabihf- -j$(nproc)
 ```
-While the game runs, the virtual console is switched to `KD_GRAPHICS`, so
-the text console (cursor blink, kernel messages) does not draw into the
-framebuffer. With double buffering it would show up as flicker in every
-other frame. `KD_TEXT` is restored at exit.
 
-### Options
+## Running on Walkman
 
-| Option | Effect |
+1. Copy the built `fbdoom` binary and an IWAD file (e.g. `doom1.wad` or `freedoom1.wad`) to the device.
+2. Stop the stock UI process holding `/dev/graphics/fb0` so it does not overwrite the screen.
+3. Launch `fbdoom`:
+
+```sh
+./fbdoom -iwad freedoom1.wad
+```
+
+### Command-Line Options
+
+| Option | Description |
 |---|---|
-| (none) | double buffering + vsync when the framebuffer allows it |
-| `-singlebuffer` | draw into the visible buffer (tears) |
-| `-novsync` | double buffering without waiting for vsync |
-| `-fps` | print frames per second every 5 s (stderr) |
-| `-serialkeys` | always read keys from the stdin terminal |
-| `-vtkeys` | always use the virtual console keyboard, even when started from a serial terminal |
-| `-keyhold N` | serial keys: how long a key stays pressed after the first press, ms (default 300) |
-| `-scaling N` | scaling factor (default: the largest that fits, e.g. 5 for 1920x1080) |
+| `-iwad <file>` | Path to IWAD file (`doom1.wad`, `doom.wad`, `freedoom1.wad`, etc.) |
+| `-fb <dev>` | Framebuffer device path (default: `/dev/graphics/fb0`, falls back to `/dev/fb0`) |
+| `-touch <dev>` | Touchscreen evdev path (default: auto-detects `/dev/input/event1`, etc.) |
+| `-singlebuffer` | Disable double buffering and draw into the front buffer |
+| `-novsync` | Flip buffers without waiting for `FBIO_WAITFORVSYNC` |
+| `-fps` | Print frame rate every 5 seconds |
 
-### Serial console controls
+## License
 
-| Key in the terminal | In the game |
-|---|---|
-| arrows or `W` `A` `S` `D` | move / turn |
-| `Q` / `E` | strafe left / right |
-| `F` | fire |
-| space | use (doors, switches) |
-| `1`-`7` | weapons |
-| `Tab` | automap |
-| `Enter`, `Esc` | menu |
-| `Y` / `N` | menu answers |
-| **`Ctrl-C`** | quit (the terminal is restored) |
+Released under the **GNU General Public License v2.0** (see [LICENSE](LICENSE) and [README.TXT](README.TXT)).
 
-A terminal only sends key presses (and autorepeat while a key is held),
-never releases. A key therefore counts as held for 300 ms after the first
-press (`-keyhold`), each autorepeat extends that by 120 ms, and it is
-released when the repeats stop. Holding an arrow gives continuous movement,
-a short tap a small step. Two keys cannot be held at the same time, because
-the terminal only repeats the last one.
+めっちゃ本家[id-Software/DOOM](https://github.com/id-Software/DOOM)がGPL-v2
 
-Kernel messages also go to the serial console. `dmesg -n 1` silences them.
-
-### USB keyboard: `openvt`
-
-With a USB keyboard the game reads raw key codes from a virtual console
-(press and release, several keys at once). It needs a virtual console as
-its controlling terminal. If you are logged in over serial, start it on one
-with BusyBox `openvt`:
-```sh
-openvt -c 2 -s -w -- sh -c 'cd /home; ./fbdoom -iwad doom1.wad'
-```
-- `-c 2`: run on `tty2` (`tty1` usually has a login getty),
-- `-s`: switch the screen to it,
-- `-w`: wait until the game exits.
-
-Quit the game with Backspace, then `chvt 1`. If it hangs:
-`killall fbdoom; chvt 1`. The game's output goes to `tty2`, so redirect it
-(`> /tmp/doom.log 2>&1`) if you want to read it.
-
-## Sound on the WIWA HD95
-
-The box has no ALSA driver. Its audio goes through two DSPs inside the SoC
-(DEC decodes, SE post-processes and drives HDMI and the DAC), and they need
-the DSP code of the box's original firmware. `i_mstarsound.c` uses
-`mstar_audio.h` from the reverse engineering workspace: it loads that code,
-starts the DSPs with the xPCM (PCM) decoder and hands it 4 KB chunks of
-16-bit PCM whenever the DSP asks for them, paced to real time (about 64 ms
-of latency). It needs root, because it uses `/dev/mem`.
-
-`mstar_audio.h` and the DSP code headers (`dsp_fw.h`, `dec03_fw.h`,
-`se31_fw.h`, `xpcm_fw.h`, `audio_init_table.h`) are **not in this repo**:
-the DSP code is MStar's, taken from the stock firmware. Build with
-them in `MSTAR_AUDIO_DIR`:
-
-```sh
-cd fbdoom
-make NOSDL=1 MSTAR_SOUND=1 MSTAR_AUDIO_DIR=/path/to/tools/board
-```
-
-### Without MStar code: `OWN_SOUND=1`
-
-`OWN_SOUND=1` builds the same sound effects on top of `own_audio.h` from
-[msd7818_rootfs_kernel](https://github.com/mztulip/msd7818_rootfs_kernel)
-(`tools/board/`). It has the same `maudio_open/write/close` API, but loads
-our own small program into the SE DSP (`tools/dsp/pcm.s` there) and sets
-the audio block up with four register writes, so it contains no MStar code
-or firmware tables. The program writes one 24-bit sample pair per HDMI
-output frame (48 kHz); the mixer fills a ring in the DSP's data memory
-through IDMA. Sound comes out on **HDMI**; the analog (SCART) output is not
-done yet. How it was found: `docs/own_dsp_audio.md` in that repo.
-
-```sh
-cd fbdoom
-make clean
-make NOSDL=1 OWN_SOUND=1 MSTAR_AUDIO_DIR=/path/to/msd7818_rootfs_kernel/tools/board
-```
-
-`make clean` matters when switching between the builds: the Makefile does
-not rebuild on flag changes.
-
-Without `MSTAR_SOUND=1` or `OWN_SOUND=1` the game builds as before, without
-sound. Run it as usual; `-nosound` or `-nosfx` turns the sound off.
-
-### Music
-
-The sound builds also play the music: `i_oplmusic.c` (Chocolate Doom 3.0.1)
-drives an emulated YM3812 (OPL2), which the mixer thread renders at 24 kHz
-for every block and doubles to 48 kHz. `-nomusic` turns it off.
-
-The emulator is `opl2.c`, written for this box. It works like the chip: a
-256-entry log-sine table and a 256-entry exponent table (1 KB together) and
-about 1 KB of state, so it stays in the CPU cache. The first version used
-fmopl (QEMU's YM3812 emulator, `fmopl.c`, still built in, `-fmopl` selects
-it): its 136 KB of randomly read tables did not fit in the 16 KB data cache
-that both VPEs of the 34Kc share, Doom's lines were evicted all the time and
-the extra scattered DRAM traffic starved the display (garbage on HDMI).
-On the board the music costs about 8 % of the CPU with `opl2.c` and 15 %
-with fmopl; with `opl2.c` only light noise is left on the picture.
-
-For the box's flash system (static, musl; the toolchain of the Buildroot
-build of that rootfs):
-```sh
-cd fbdoom
-make NOSDL=1 OWN_SOUND=1 MSTAR_AUDIO_DIR=/path/to/msd7818_rootfs_kernel/tools/board \
-     CROSS_COMPILE=/path/to/rootfs_mini/output/host/bin/mipsel-buildroot-linux-musl- \
-     OBJDIR=build_musl OUTPUT=fbdoom_musl LDFLAGS="-Wl,--gc-sections -static"
-```
-
-## Performance on the WIWA HD95
-
-1600x1000 (320x200 scaled x5) on 1920x1080 RGB565, measured with `-fps`
-on the title screen demo:
-
-| Version | fps |
-|---|---|
-| upstream drawing (per-byte palette lookup + `write()`) | ~6 |
-| fast 16 bpp path, `-singlebuffer` | ~50 |
-| fast path, double buffered, `-novsync` | ~49 |
-| fast path, double buffered + vsync (default) | **~35**, no tearing |
-
-Copying a 1600x1000 frame into the framebuffer takes about 12 ms
-(269 MB/s), and the x5 scaling with 16-bit stores about 9 ms.
