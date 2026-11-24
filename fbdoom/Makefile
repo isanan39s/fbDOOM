@@ -5,7 +5,8 @@
 # $Log:$
 #
 
-CROSS_COMPILE ?= mipsel-buildroot-linux-gnu-
+CROSS_COMPILE ?= armv7-unknown-linux-musleabihf-
+NOSDL ?= 1
 
 ifeq ($(V),1)
 	VB=''
@@ -13,16 +14,14 @@ else
 	VB=@
 endif
 
-#LIBS+=-lXext -lX11 -lnsl -lm -lSDL
-#CFLAGS+=-Wunused-const-variable=0 
-#CFLAGS+=-fsanitize=address
 OBJS+=$(OBJDIR)/i_video_fbdev.o
 OBJS+=$(OBJDIR)/i_input_tty.o
+OBJS+=$(OBJDIR)/i_touch.o
 
-CC=$(CROSS_COMPILE)gcc  # gcc or g++
-CFLAGS+=-ggdb3 -Os -std=gnu89
+CC=$(CROSS_COMPILE)gcc
+CFLAGS+=-ggdb3 -std=gnu89 -O2 -static -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard
 LDFLAGS+=-Wl,--gc-sections
-CFLAGS+=-ggdb3 -Wall -DNORMALUNIX -DLINUX -DSNDSERV # -DUSEASM
+CFLAGS+=-Wall -DNORMALUNIX -DLINUX -DSNDSERV
 LIBS+=-lm -lc
 
 ifneq ($(NOSDL),1)

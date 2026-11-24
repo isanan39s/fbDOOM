@@ -38,6 +38,7 @@
 #include "i_swap.h"
 #include "i_timer.h"
 #include "i_video.h"
+#include "i_touch.h"
 #include "i_scale.h"
 #include "m_argv.h"
 #include "m_config.h"
@@ -577,8 +578,14 @@ void I_GetEvent(void)
     int pressed;
     unsigned char key;
 
+    I_GetTouchEvent();
+
     if (serial_mode) {
         serial_get_event();
+        return;
+    }
+
+    if (kb < 0) {
         return;
     }
 
@@ -642,6 +649,9 @@ void I_GetEvent(void)
 
 void I_InitInput(void)
 {
+    extern struct fb_var_screeninfo fb;
+    I_InitTouch(fb.xres, fb.yres);
+
     if (kbd_init())
         printf("No keyboard input.\n");
 

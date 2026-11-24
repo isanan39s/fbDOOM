@@ -1,0 +1,29 @@
+  となると、更新がいまいちな原因はほぼ間違いなく 1番目の「fbdoom が毎フレーム FBIOPUT_VSCREENINFO（フリップ）を呼んでいないこと」 です。
+  test_fb がわざわざ FBIOPUT_VSCREENINFO でフリップしているのがその証拠なので、fbdoom 側のフレーム描画完了時（I_FinishUpdate）に ioctl(fd_fb, FBIOPUT_VSCREENINFO, &vinfo)
+  を追加してビルドし直すと、スムーズに更新されるようになるはずです。
+
+────────────────────────────────────────────────────────────
+> FBIOPUT_VSCREENINFOって何?
+
+? Thought for 4s, 154 tokens
+  `FBIOPUT_VSCREENINFO` is an `ioctl` command within the Linux framebuffer (`<linux/fb.h>`) used to set variable screen information. It corresponds to the `struct fb_var_screeninfo`, which includes details like resolution and bits per
+  pixel (bpp). The user likely wants an explanation of this command within the context of Linux framebuffer manipulation.
+
+  FBIOPUT_VSCREENINFO は、Linux のフレームバッファ（<linux/fb.h>）が用意している ioctl コマンドのひとつ です。
+
+  何をするものか
+
+  ? FBIOGET_VSCREENINFO で画面の可変情報（解像度・色深度・仮想画面のオフセット位置などが入った struct fb_var_screeninfo）を取得し、
+  ? FBIOPUT_VSCREENINFO でその情報をドライバに書き戻す（反映させる） ための命令です。
+
+  なぜ fbdoom で重要なのか
+
+  普通の PC 用 Linux だと、mmap したメモリを書き換えるだけで画面が変わります。
+  しかし Walkman（MediaTek mtkfb）のような組み込み機器では、省電力やティアリング防止のために 「メモリを書き換えただけでは液晶に転送せず、FBIOPUT_VSCREENINFO（または
+  FBIOPAN_DISPLAY）が呼ばれたタイミングで初めて液晶へ転送・画面切り替え（フリップ）を実行する」 作りになっていることがよくあります。
+
+  C言語で書くと、毎フレームの描画の最後に以下のような 1 行を入れるイメージです：
+
+    // 描画が終わったタイミングでドライバに「画面を更新しろ」と通知する
+    vinfo.activate |= FB_ACTIVATE_NOW; // 必要な場合
+    ioctl(fd_fb, FBIOPUT_VSCREENINFO, &vinfo);

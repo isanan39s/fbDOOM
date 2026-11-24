@@ -31,6 +31,7 @@ rcsid[] = "$Id: i_x.c,v 1.6 1997/02/03 22:45:10 b1 Exp $";
 #include "d_event.h"
 #include "d_main.h"
 #include "i_video.h"
+#include "i_touch.h"
 #include "z_zone.h"
 #include "i_timer.h"
 
@@ -80,6 +81,8 @@ static int show_fps;            /* -fps: print frames per second every 5 s */
  * line built in RAM and copied fb_scaling times into the mmapped fb */
 static uint16_t palette16[256];
 static uint16_t *line16;
+static uint32_t palette32[256];
+static uint32_t *line32;
 static void fb_restore(void);
 static void console_graphics(void);
 static int vt_fd = -1;          /* console put in KD_GRAPHICS while playing */
@@ -193,18 +196,27 @@ void I_InitGraphics (void)
 {
     int i;
 
-    /* Open fbdev file descriptor */
-    fd_fb = open("/dev/fb0", O_RDWR);
-    if (fd_fb < 0)
+    /* Open fbdev file descriptor (Walkman uses /dev/graphics/fb0) */
     {
-        printf("Could not open /dev/fb0");
-        exit(-1);
+        const char *fb_path = "/dev/graphics/fb0";
+        i = M_CheckParmWithArgs("-fb", 1);
+        if (i > 0)
+            fb_path = myargv[i + 1];
+        fd_fb = open(fb_path, O_RDWR);
+        if (fd_fb < 0 && i <= 0) {
+            fb_path = "/dev/fb0";
+            fd_fb = open(fb_path, O_RDWR);
+        }
+        if (fd_fb < 0) {
+            printf("Could not open framebuffer (%s)\n", fb_path);
+            exit(-1);
+        }
     }
 
     /* fetch framebuffer info */
     ioctl(fd_fb, FBIOGET_VSCREENINFO, &fb);
     /* change params if needed */
-    //ioctl(fd_fb, FBIOPUT_VSCREENINFO, &fb);
+    ioctl(fd_fb, FBIOPUT_VSCREENINFO, &fb);
     printf("I_InitGraphics: framebuffer: x_res: %d, y_res: %d, x_virtual: %d, y_virtual: %d, bpp: %d, grayscale: %d\n",
             fb.xres, fb.yres, fb.xres_virtual, fb.yres_virtual, fb.bits_per_pixel, fb.grayscale);
 
@@ -232,12 +244,14 @@ void I_InitGraphics (void)
 	I_VideoBuffer_FB = (byte*)malloc(fb.xres * fb.yres * (fb.bits_per_pixel/8));     // For a single write() syscall to fbdev
 
     ioctl(fd_fb, FBIOGET_FSCREENINFO, &fb_fix);
-    if (fb.bits_per_pixel == 16) {
+    if (fb.bits_per_pixel == 16 || fb.bits_per_pixel == 32) {
         fb_mem = mmap(NULL, fb_fix.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fd_fb, 0);
         if (fb_mem == MAP_FAILED)
             fb_mem = NULL;
-        else
+        else if (fb.bits_per_pixel == 16)
             line16 = malloc(fb.xres * 2);
+        else
+            line32 = malloc(fb.xres * 4);
     }
     if (fb_mem && fb.yres_virtual >= 2 * fb.yres && !M_CheckParm("-singlebuffer")) {
         fb_double = 1;
@@ -509,36 +523,52 @@ void I_FinishUpdate (void)
         count_fps();
 
     if (fb_mem) {
-        int top = (fb.yres - SCREENHEIGHT * fb_scaling) / 2;
-        int left = (fb.xres - SCREENWIDTH * fb_scaling) / 2;
-        int w = SCREENWIDTH * fb_scaling;
-        unsigned char *dst = fb_mem + (fb_double ? fb_back * fb.yres : 0) * fb_fix.line_length
-                             + top * fb_fix.line_length + left * 2;
+        int target_w = fb.xres;
+        int target_h = (fb.yres >= 360) ? 360 : fb.yres;
+        int top = 0;
+        int left = 0;
+        int bpp_bytes = fb.bits_per_pixel / 8;
+        unsigned char *screen_base = fb_mem + (fb_double ? fb_back * fb.yres : 0) * fb_fix.line_length;
+        unsigned char *dst = screen_base + top * fb_fix.line_length + left * bpp_bytes;
         byte *src = I_VideoBuffer;
         uint32_t zero = 0;
-        int i, x;
+        int x;
 
-        for (y = 0; y < SCREENHEIGHT; y++) {
-            uint16_t *o = line16;
+        for (y = 0; y < target_h; y++) {
+            int sy = (y * SCREENHEIGHT) / target_h;
+            byte *row = src + sy * SCREENWIDTH;
 
-            for (x = 0; x < SCREENWIDTH; x++) {
-                uint16_t p = palette16[*src++];
-
-                for (i = 0; i < fb_scaling; i++)
-                    *o++ = p;
+            if (bpp_bytes == 2) {
+                uint16_t *o = line16;
+                for (x = 0; x < target_w; x++) {
+                    *o++ = palette16[row[(x * SCREENWIDTH) / target_w]];
+                }
+                memcpy(dst, line16, target_w * 2);
+            } else {
+                uint32_t *o = line32;
+                for (x = 0; x < target_w; x++) {
+                    *o++ = palette32[row[(x * SCREENWIDTH) / target_w]];
+                }
+                memcpy(dst, line32, target_w * 4);
             }
-            for (i = 0; i < fb_scaling; i++) {
-                memcpy(dst, line16, w * 2);
-                dst += fb_fix.line_length;
-            }
+            dst += fb_fix.line_length;
         }
+
+        I_DrawTouchOverlay(screen_base, fb_fix.line_length,
+                           fb.xres, fb.yres, fb.bits_per_pixel,
+                           &fb, fb_double ? fb_back : 0);
         if (fb_double) {
             /* show the hidden buffer at the next vsync */
             fb.yoffset = fb_back * fb.yres;
             ioctl(fd_fb, FBIOPAN_DISPLAY, &fb);
+            fb.activate |= FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
+            ioctl(fd_fb, FBIOPUT_VSCREENINFO, &fb);
             if (fb_vsync)
                 ioctl(fd_fb, FBIO_WAITFORVSYNC, &zero);   /* the old buffer is free after this */
             fb_back ^= 1;
+        } else {
+            fb.activate |= FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
+            ioctl(fd_fb, FBIOPUT_VSCREENINFO, &fb);
         }
         return;
     }
@@ -583,6 +613,8 @@ void I_FinishUpdate (void)
     /* Start drawing from y-offset */
     lseek(fd_fb, y_offset * fb.xres, SEEK_SET);
     write(fd_fb, I_VideoBuffer_FB, (SCREENHEIGHT * fb_scaling * (fb.bits_per_pixel/8)) * fb.xres); /* draw only portion used by doom + x-offsets */
+    fb.activate |= FB_ACTIVATE_NOW;
+    ioctl(fd_fb, FBIOPUT_VSCREENINFO, &fb);
 }
 
 //
@@ -629,6 +661,10 @@ void I_SetPalette (byte* palette)
         palette16[i] = (colors[i].r >> (8 - fb.red.length)) << fb.red.offset |
                        (colors[i].g >> (8 - fb.green.length)) << fb.green.offset |
                        (colors[i].b >> (8 - fb.blue.length)) << fb.blue.offset;
+        palette32[i] = ((uint32_t)(colors[i].r >> (8 - fb.red.length)) << fb.red.offset) |
+                       ((uint32_t)(colors[i].g >> (8 - fb.green.length)) << fb.green.offset) |
+                       ((uint32_t)(colors[i].b >> (8 - fb.blue.length)) << fb.blue.offset) |
+                       (fb.transp.length ? (0xffu >> (8 - fb.transp.length)) << fb.transp.offset : 0);
     }
 
     /* Set new color map in kernel framebuffer driver */

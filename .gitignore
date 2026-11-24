@@ -1,0 +1,9 @@
+# Build artifacts
+fbdoom/build*/
+fbdoom/fbdoom
+fbdoom/fbdoom_*
+fbdoom/*.map
+fbdoom/*.gdb
+*.o
+*.a
+a.out
